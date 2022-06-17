@@ -1,0 +1,1171 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+  <title>Dinosaurio Google en WebGL 2.0</title>
+  <meta http-equiv="content-type" content="text/html; charset=charset=utf-8">
+  <style type="text/css">
+
+    #canvas-holder {
+      float:left;
+      margin-top:10px;
+      margin-right:10px;
+    }
+    #menu {
+      float:left;
+      background-color:white;
+      border: 1px solid black;
+      margin-top: 50pt;
+      padding: 8px
+    }
+    #overlay {
+      position: absolute;
+      margin-top: 50pt;
+      left: 500px;
+      top: 10px;
+      color: rgba(1, 1, 1, 0.7);
+      font-size: 20px;
+      font-family: monospace;
+      padding: 1em;
+    }
+  </style>
+</head>
+   <body>
+      <h2 id="headline">Dinosaurio Google en WebGL 2.0</h2>
+      <noscript><p><b>Lo siento, pero ésta página requiere JavaScript.</b></p></noscript>
+
+      <div id="canvas-holder">
+        <canvas id="webglcanvas"  width="700" height="300"></canvas>
+        <div id="overlay" >
+          <div>Puntos: <span id="puntos"></span></div>
+          <div>Nivel: <span id="nivel"></span></div>
+        </div>
+      </div>
+      <!-- style="border: 1px solid #000000;"
+        /***************************************************************************/
+        /* Se definen los códigos shaders.                                         */
+        /***************************************************************************/
+      -->
+      <script id="vs" type="vertex">
+        #version 300 es
+        uniform mat4 uMatrizProyeccion;
+        uniform mat4 uMatrizVista;
+        uniform mat4 uMatrizModelo;
+        layout(location = 0) in vec2 aVertices;
+        void main() {
+          gl_Position = uMatrizProyeccion * uMatrizVista * uMatrizModelo * vec4(aVertices, 0.0, 1.0);
+          gl_PointSize = 10.0;
+        }
+      </script>
+
+      <script id="fs" type="fragment">
+        #version 300 es
+        precision highp float;
+        uniform vec4 uColor;
+        out vec4 color;
+        void main() {
+            color = uColor;
+        }
+      </script>
+	
+      <script>
+        "use strict";
+
+        /* Variables globales */
+        var canvas;
+        var programaID;
+        var gl;
+        var circulo;
+        var suelo;
+        var nube;
+        var dinosaurio;
+        var dinosauriot;
+        var cactus;
+        var cactust;
+        var cubo;
+        var cpuntos = 0;
+        var cnivel = 1;
+
+        /* Variables Uniformes */
+        var uColor;
+        var uMatrizProyeccion;
+        var uMatrizVista;
+        var uMatrizModelo;
+
+        /* Matrices */
+        var MatrizProyeccion = new Array(16);
+        var MatrizVista = new Array(16);
+        var MatrizModelo = new Array(16);
+        var _MatrizModelo = new Array(16);
+        var _MatrizModelo2 = new Array(16);
+
+        /* Incremento del ángulo de la animación */
+        var pxn = 0;
+        var pxs = 0;
+        var px = 0;
+        var ty = -1;
+        var vely = 0.1;
+        var veln = 0.01;
+        var vels = 0.08;
+        var velc = 0.06;
+        var animacion = false;
+        const PERIODO_DE_LA_ROTACION = 0.1; // en segundos
+        var tiempo_real;
+        var tiempoRotacion = PERIODO_DE_LA_ROTACION;
+        var inicio = Date.now(); // Tiempo Inicial
+
+        var pun = document.querySelector('#puntos');
+        var niv = document.querySelector('#nivel');
+
+        var punnodo = document.createTextNode("");
+        var nivnodo = document.createTextNode("");
+
+        pun.appendChild(punnodo);
+        niv.appendChild(nivnodo);
+
+        /***************************************************************************/
+        /* Se crean, compilan y enlazan los programas Shader                       */
+        /***************************************************************************/
+        function compilaEnlazaLosShaders() {
+
+          /* Se compila el shader de vertice */
+          var shaderDeVertice = gl.createShader(gl.VERTEX_SHADER);
+          gl.shaderSource(shaderDeVertice, document.getElementById("vs").text.trim());
+          gl.compileShader(shaderDeVertice);
+          if (!gl.getShaderParameter(shaderDeVertice, gl.COMPILE_STATUS)) {
+             console.error(gl.getShaderInfoLog(shaderDeVertice));
+          }
+
+          /* Se compila el shader de fragmento */
+          var shaderDeFragmento = gl.createShader(gl.FRAGMENT_SHADER);
+          gl.shaderSource(shaderDeFragmento, document.getElementById("fs").text.trim());
+          gl.compileShader(shaderDeFragmento);
+          if (!gl.getShaderParameter(shaderDeFragmento, gl.COMPILE_STATUS)) {
+             console.error(gl.getShaderInfoLog(shaderDeFragmento));
+          }
+
+          /* Se enlaza ambos shader */
+          programaID = gl.createProgram();
+          gl.attachShader(programaID, shaderDeVertice); 
+          gl.attachShader(programaID, shaderDeFragmento);
+          gl.linkProgram(programaID);
+          if (!gl.getProgramParameter(programaID, gl.LINK_STATUS)) {
+             console.error(gl.getProgramInfoLog(programaID));
+          }
+
+          /* Se instala el programa de shaders para utilizarlo */
+          gl.useProgram(programaID);
+        }
+
+        /***************************************************************************/
+        /* Transformación de las Matrices                                          */
+        /***************************************************************************/
+
+        /* Convierte de grados a radianes */
+        function toRadians(grados) {
+          return grados * Math.PI / 180;
+        };
+
+        /* Matriz Identidad */
+        function identidad(r) {
+          r[0] = 1; r[4] = 0; r[ 8] = 0; r[12] = 0;
+          r[1] = 0; r[5] = 1; r[ 9] = 0; r[13] = 0;
+          r[2] = 0; r[6] = 0; r[10] = 1; r[14] = 0;
+          r[3] = 0; r[7] = 0; r[11] = 0; r[15] = 1;
+        }
+
+        /* Traslación - glTranslatef */
+        function traslacion(matriz, tx, ty, tz) {
+          var r = new Array(16);
+          r[0] = 1; r[4] = 0; r[ 8] = 0; r[12] = tx;
+          r[1] = 0; r[5] = 1; r[ 9] = 0; r[13] = ty;
+          r[2] = 0; r[6] = 0; r[10] = 1; r[14] = tz;
+          r[3] = 0; r[7] = 0; r[11] = 0; r[15] =  1;
+          multiplica(matriz, matriz, r);
+        }
+
+        /* Escalación - glScalef */
+        function escalacion(matriz, sx, sy, sz) { 
+          var r = new Array(16);
+          r[0] = sx; r[4] =  0; r[ 8] =  0; r[12] =  0;
+          r[1] =  0; r[5] = sy; r[ 9] =  0; r[13] =  0;
+          r[2] =  0; r[6] =  0; r[10] = sz; r[14] =  0;
+          r[3] =  0; r[7] =  0; r[11] =  0; r[15] =  1;
+          multiplica(matriz, matriz, r);
+        }
+
+        /* Rotación sobre X - glRotatef */
+        function rotacionX(matriz, theta){
+          let r = new Array(16);
+          var c = Math.cos(toRadians(theta));
+          var s = Math.sin(toRadians(theta));
+          r[0] =  1; r[4] =  0; r[ 8] =  0; r[12] = 0;
+          r[1] =  0; r[5] =  c; r[ 9] = -s; r[13] = 0;
+          r[2] =  0; r[6] =  s; r[10] =  c; r[14] = 0;
+          r[3] =  0; r[7] =  0; r[11] =  0; r[15] = 1;
+          multiplica(matriz, matriz, r); 
+        }
+
+        /* Rotación sobre Y - glRotatef */
+        function rotacionY(matriz, theta){
+          let r = new Array(16);
+          var c = Math.cos(toRadians(theta));
+          var s = Math.sin(toRadians(theta));
+          r[0] =  c; r[4] =  0; r[ 8] =  s; r[12] = 0;
+          r[1] =  0; r[5] =  1; r[ 9] =  0; r[13] = 0;
+          r[2] = -s; r[6] =  0; r[10] =  c; r[14] = 0;
+          r[3] =  0; r[7] =  0; r[11] =  0; r[15] = 1;
+          multiplica(matriz, matriz, r);
+        }
+	
+        /* Rotación sobre Z - glRotatef */
+        function rotacionZ(matriz, theta){
+          let r = new Array(16);
+          var c = Math.cos(toRadians(theta));
+          var s = Math.sin(toRadians(theta));
+          r[0] =  c; r[4] = -s; r[ 8] =  0; r[12] = 0;
+          r[1] =  s; r[5] =  c; r[ 9] =  0; r[13] = 0;
+          r[2] =  0; r[6] =  0; r[10] =  1; r[14] = 0;
+          r[3] =  0; r[7] =  0; r[11] =  0; r[15] = 1;
+          multiplica(matriz, matriz, r);
+        }
+
+        /* Proyección Paralela - glOrtho */
+        function ortho(r, izq, der, abj, arr, cerca, lejos) {
+          r[0] = 2/(der - izq); r[4] =             0; r[ 8] =                  0; r[12] =         -(der + izq)/(der - izq);
+          r[1] =             0; r[5] = 2/(arr - abj); r[ 9] =                  0; r[13] =         -(arr + abj)/(arr - abj);
+          r[2] =             0; r[6] =             0; r[10] = -2/(lejos - cerca); r[14] = -(lejos + cerca)/(lejos - cerca);
+          r[3] =             0; r[7] =             0; r[11] =                  0; r[15] =                                1;
+        }
+
+        /* Proyección Perspectiva - glFrustum */
+        function frustum(r, izq, der, abj, arr, cerca, lejos) {
+          r[0] = 2*cerca/(der-izq); r[4] =                 0; r[ 8] =          (der+izq)/(der-izq); r[12] =                            0;
+          r[1] =                 0; r[5] = 2*cerca/(arr-abj); r[ 9] =          (arr+abj)/(arr-abj); r[13] =                            0;
+          r[2] =                 0; r[6] =                 0; r[10] = -(lejos+cerca)/(lejos-cerca); r[14] = -2*lejos*cerca/(lejos-cerca);
+          r[3] =                 0; r[7] =                 0; r[11] =                           -1; r[15] =                            0;
+        }
+
+        /* Proyección Perspectiva - gluPerspective */
+        function perspective(r, fovy, aspecto, cerca, lejos) {
+          var ang = fovy * 0.5;
+          var f = (Math.abs(Math.sin(toRadians(ang))) < 1e-8 ? 0 : 1) / Math.tan(toRadians(ang));
+          r[0] = f/aspecto; r[4] = 0; r[ 8] =                                  0; r[12] =                                       0;
+          r[1] =         0; r[5] = f; r[ 9] =                                  0; r[13] =                                       0;
+          r[2] =         0; r[6] = 0; r[10] = -(lejos + cerca) / (lejos - cerca); r[14] =  -2.0 * lejos * cerca / (lejos - cerca);
+          r[3] =         0; r[7] = 0; r[11] =                              - 1.0; r[15] =                                       0;
+        }
+
+        /* Multiplicación de matrices de 4 x 4 */
+        function multiplica(c, a, b) {
+          let r = new Array(16);
+          let i, j, k;
+          for (i = 0; i < 4; i++){
+            for (j = 0; j < 4; j++){
+              let s = 0;
+              for (k = 0; k < 4; k++)
+                s = s + a[i + k * 4] * b[k + j * 4];
+                r[i + j * 4] = s;
+              }
+            }
+          for (i = 0; i < 16; i++)
+            c[i] = r[i];
+        }
+
+        /***************************************************************************/
+        /* Se define la geometría y se almacenan en los buffers de memoria y se renderiza. */
+        /***************************************************************************/
+
+        class Suelo {
+          constructor(gl) {
+
+            var vertices = [
+
+              -5.10,  0.00, // 0
+              -3.30,  0.00, // 1
+              -3.30,  0.10, // 2
+              -3.26,  0.15, // 3
+              -3.24,  0.15, // 4
+              -3.22,  0.10, // 5
+              -3.20,  0.10, // 6
+              -3.20,  0.00, // 7
+              
+              -1.30,  0.00, // 8
+              -1.30,  0.05, // 9
+              -1.26,  0.07, // 10
+              -1.24,  0.07, // 11
+              -1.22,  0.05, // 12
+              -1.20,  0.05, // 13
+              -1.20,  0.00, // 14
+            
+              11.20,  0.00, // 15
+              11.20, -0.05, // 16
+              11.22, -0.07, // 17
+              11.24, -0.07, // 18
+              11.24, -0.05, // 19
+              11.26, -0.05, // 20
+              11.26,  0.00, // 21
+              
+              14.20,  0.00, // 22
+              14.20,  0.05, // 23
+              14.22,  0.07, // 24
+              14.24,  0.07, // 25
+              14.26,  0.05, // 26
+              14.28,  0.05, // 27
+              14.28,  0.00, // 28
+              
+              23.00,  0.00, // 29
+            ];
+
+            /* Se crea el objeto del arreglo de vértices (VAO) */
+            this.trianguloVAO = gl.createVertexArray();
+
+            /* Se activa el objeto */
+            gl.bindVertexArray(this.trianguloVAO);
+
+
+            /* Se genera un nombre (código) para el buffer */ 
+            var codigoVertices = gl.createBuffer();
+
+            /* Se asigna un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, codigoVertices);
+         
+            /* Se transfiere los datos desde la memoria nativa al buffer de la GPU */
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+            /* Se habilita el arreglo de los vértices (indice = 0) */
+            gl.enableVertexAttribArray(0);
+
+            /* Se especifica los atributos del arreglo de vértices */
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+            /* Se deja de asignar un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+          }
+
+          dibuja(gl) {
+
+            /* Se activa el objeto del arreglo de vértices */
+            gl.bindVertexArray(this.trianguloVAO);
+
+            /* Se renderiza las primitivas desde los datos del arreglo */
+            gl.drawArrays(gl.LINE_STRIP, 0, 30);
+            
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+          }
+        }
+
+        class Cubo {
+          constructor(gl) {
+
+            var vertices = [
+              -0.60 ,  -1.00, // 0
+              -0.20 ,  -1.00, // 1
+              -0.20 ,  -0.60, // 2
+              -0.60 ,  -1.00, // 3
+              -0.60 ,  -0.60, // 4
+            ];
+
+            /* Se crea el objeto del arreglo de vértices (VAO) */
+            this.trianguloVAO = gl.createVertexArray();
+
+            /* Se activa el objeto */
+            gl.bindVertexArray(this.trianguloVAO);
+
+
+            /* Se genera un nombre (código) para el buffer */ 
+            var codigoVertices = gl.createBuffer();
+
+            /* Se asigna un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, codigoVertices);
+         
+            /* Se transfiere los datos desde la memoria nativa al buffer de la GPU */
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+            /* Se habilita el arreglo de los vértices (indice = 0) */
+            gl.enableVertexAttribArray(0);
+
+            /* Se especifica los atributos del arreglo de vértices */
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+            /* Se deja de asignar un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+          }
+
+          dibuja(gl) {
+
+            /* Se activa el objeto del arreglo de vértices */
+            gl.bindVertexArray(this.trianguloVAO);
+
+            /* Se renderiza las primitivas desde los datos del arreglo */
+            gl.drawArrays(gl.LINE_STRIP, 0, 5);
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+          }
+        }
+
+        class Nube {
+          constructor(gl) {
+
+            var vertices = [
+              -0.88,  0.00, // 0
+               0.74,  0.00, // 1
+               0.73,  0.06, // 2
+               0.68,  0.07, // 3
+               0.67,  0.12, // 4
+               0.61,  0.12, // 5
+               0.60,  0.20, // 6
+               0.49,  0.22, // 7
+               0.49,  0.28, // 8
+               0.22,  0.31, // 9
+               0.20,  0.40, // 10
+               0.00,  0.47, // 11
+              -0.20,  0.40, // 12
+              -0.32,  0.34, // 13
+              -0.34,  0.24, // 14
+              -0.48,  0.17, // 15
+              -0.72,  0.16, // 16
+              -0.91,  0.06, // 17
+            ];
+
+            /* Se crea el objeto del arreglo de vértices (VAO) */
+            this.trianguloVAO = gl.createVertexArray();
+
+            /* Se activa el objeto */
+            gl.bindVertexArray(this.trianguloVAO);
+
+
+            /* Se genera un nombre (código) para el buffer */ 
+            var codigoVertices = gl.createBuffer();
+
+            /* Se asigna un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, codigoVertices);
+         
+            /* Se transfiere los datos desde la memoria nativa al buffer de la GPU */
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+            /* Se habilita el arreglo de los vértices (indice = 0) */
+            gl.enableVertexAttribArray(0);
+
+            /* Se especifica los atributos del arreglo de vértices */
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+            /* Se deja de asignar un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+          }
+
+          dibuja(gl) {
+
+            /* Se activa el objeto del arreglo de vértices */
+            gl.bindVertexArray(this.trianguloVAO);
+
+            /* Se renderiza las primitivas desde los datos del arreglo */
+            gl.drawArrays(gl.LINE_LOOP, 0, 18);
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+          }
+        }
+
+        class Cactus {
+          constructor(gl) {
+
+            var vertices = [
+              -0.28, -0.17, // 0
+              -0.27,  0.36, // 1
+              -0.28, -0.17, // 2
+              -0.32,  0.40, // 3
+              -0.28, -0.17, // 4
+              -0.44,  0.40, // 5
+              -0.28, -0.17, // 6
+              -0.48,  0.36, // 7
+              -0.28, -0.17, // 8
+              -0.47, -0.24, // 9
+              -0.28, -0.17,// 10
+              -0.35, -0.36, // 11
+              -0.28, -0.17, // 12
+              -0.14, -0.37, // 13
+              -0.28, -0.17, // 14
+              -0.14, -0.17, // 15
+            ];
+
+            /* Se crea el objeto del arreglo de vértices (VAO) */
+            this.trianguloVAO = gl.createVertexArray();
+
+            /* Se activa el objeto */
+            gl.bindVertexArray(this.trianguloVAO);
+
+            /* Se genera un nombre (código) para el buffer */ 
+            var codigoVertices = gl.createBuffer();
+
+            /* Se asigna un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, codigoVertices);
+         
+            /* Se transfiere los datos desde la memoria nativa al buffer de la GPU */
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+            /* Se habilita el arreglo de los vértices (indice = 0) */
+            gl.enableVertexAttribArray(0);
+
+            /* Se especifica los atributos del arreglo de vértices */
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+            /* Se deja de asignar un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+          }
+
+          dibuja(gl) {
+
+            /* Se activa el objeto del arreglo de vértices */
+            gl.bindVertexArray(this.trianguloVAO);
+
+            /* Se renderiza las primitivas desde los datos del arreglo */
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 16);
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+          }
+        }
+
+        class CactusT {
+          constructor(gl) {
+
+            var vertices = [
+              -0.14, -0.98, // 0
+              -0.15,  0.85, // 1
+              -0.14, -0.98, // 2
+              -0.11,  0.89, // 3
+              -0.14, -0.98, // 4
+               0.09,  0.89, // 5
+              -0.14, -0.98, // 6
+               0.13,  0.85, // 7
+              -0.14, -0.98, // 8
+               0.14, -0.98, // 9
+            ];
+
+            /* Se crea el objeto del arreglo de vértices (VAO) */
+            this.trianguloVAO = gl.createVertexArray();
+
+            /* Se activa el objeto */
+            gl.bindVertexArray(this.trianguloVAO);
+
+            /* Se genera un nombre (código) para el buffer */ 
+            var codigoVertices = gl.createBuffer();
+
+            /* Se asigna un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, codigoVertices);
+         
+            /* Se transfiere los datos desde la memoria nativa al buffer de la GPU */
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+            /* Se habilita el arreglo de los vértices (indice = 0) */
+            gl.enableVertexAttribArray(0);
+
+            /* Se especifica los atributos del arreglo de vértices */
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+            /* Se deja de asignar un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+          }
+
+          dibuja(gl) {
+
+            /* Se activa el objeto del arreglo de vértices */
+            gl.bindVertexArray(this.trianguloVAO);
+
+            /* Se renderiza las primitivas desde los datos del arreglo */
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 10);
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+          }
+        }
+
+        class Dinosaurio {
+          constructor(gl) {
+            var vertices = [
+
+            -1.77	,	 0.90	, 
+            -1.77	,	 0.76	,
+            -1.86	,	 0.90	,
+            -1.77	,	 0.76	,
+            -1.86	,	 0.51	, 
+            -1.77	,	 0.76	,
+            -1.72	,	 0.50	,
+            -1.48	,	 0.76	,
+            -1.72 ,	 0.39	,
+            -1.48 ,	 0.64	,
+            -1.58 ,	 0.39	,
+            -0.88 ,	 0.64	,
+            -1.58 ,	 0.25	,
+            -0.88 ,	 0.64	,
+            -1.44 ,	 0.25	,
+            -0.88 ,	 0.64	,
+            -1.44 ,	 0.12	,
+            -0.88 ,	 0.64	,
+            -1.30 ,	 0.11	,
+            -0.88 ,	 0.64	,
+            -1.30 ,	 0.00	,
+            -0.88 ,	 0.64	,
+            -1.17 ,	-0.01	,
+            -0.88 ,	 0.64	,
+            -1.17 ,	-0.16	,
+            -0.88 ,	 0.64	,
+            -1.03 ,	-0.16	,
+            -0.88 ,	 0.64	,
+            -1.03 ,	-0.32	,
+             0.26 ,	 0.64	,
+            -0.87 ,	 0.75	,
+             0.26 ,	 0.75	,
+             0.26 ,	 0.64	,
+             0.40 ,	-0.02	,
+             0.58 ,	 0.64	,
+             0.71 ,	-0.03	,
+             0.58 ,	 0.69	,
+             0.82 ,	 0.49	,
+             0.71 ,	 0.69	,
+             0.81 ,	 0.64	,
+             0.72 ,	 0.83	,
+             0.97 ,	 0.64	,
+             1.77 ,	 0.83	,
+             0.97 ,	 0.49	,
+             1.77 ,	 0.69	,
+             1.91 ,	 0.10	,
+             1.91 ,	 0.69	,
+             1.22 ,	 0.10	,
+             0.97 ,	 0.49	,
+             1.22 ,	-0.06	,
+             0.71 ,	-0.16	,
+             1.62 ,	-0.16	,
+             1.62 ,	-0.06	,
+             0.71 ,	-0.16	,
+             1.22 ,	-0.06	,
+             0.71 ,	-0.03	,
+             0.97 ,	 0.49	,
+             0.82 ,	 0.49	,
+             0.40 , -0.02	,
+             0.26 ,  0.64 ,
+             0.40 , -0.26 , 
+             0.16 , -0.26 ,
+             0.27 , -0.25 ,
+             0.16 , -0.51 ,
+             0.27 , -0.41 ,
+             0.40 , -0.51 ,
+             0.40 , -0.41 ,
+             0.16 , -0.51 ,
+             0.27 , -0.41 ,
+             0.16 , -0.25 ,
+             0.26 ,  0.63 ,
+             0.16 , -0.25 ,
+             0.26 ,  0.63 ,
+            -0.23 , -0.25 ,
+            -0.42 , -0.31 ,
+            -0.23 , -0.25 ,
+            -0.42 , -0.43 ,
+            -0.23 , -0.33 ,
+            -0.12 , -0.42 ,
+            -0.12 , -0.33 ,
+            -0.42 , -0.43 ,
+            -0.23 , -0.33 ,
+            -0.42 , -0.31 ,
+            -0.23 , -0.25 ,
+             0.26 ,  0.63 ,
+            -0.42 , -0.31 ,
+            -1.03 , -0.16 ,
+            -0.73 , -0.31 ,
+            -1.03 , -0.31 ,
+            -0.73 , -0.42 ,
+            -1.11 , -0.32 ,
+            -0.87 , -0.42 ,
+            -1.11 , -0.32 ,
+            -0.88 , -0.57 ,
+            -1.11 , -0.32 ,
+            -0.98 , -0.57 ,
+            -1.11 , -0.85 ,
+            -0.98 , -0.76 ,
+            -0.88 , -0.85 ,
+            -0.88 , -0.77 ,
+            ];
+
+            /* Se crea el objeto del arreglo de vértices (VAO) */
+            this.trianguloVAO = gl.createVertexArray();
+
+            /* Se activa el objeto */
+            gl.bindVertexArray(this.trianguloVAO);
+
+
+            /* Se genera un nombre (código) para el buffer */ 
+            var codigoVertices = gl.createBuffer();
+
+            /* Se asigna un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, codigoVertices);
+         
+            /* Se transfiere los datos desde la memoria nativa al buffer de la GPU */
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+            /* Se habilita el arreglo de los vértices (indice = 0) */
+            gl.enableVertexAttribArray(0);
+
+            /* Se especifica los atributos del arreglo de vértices */
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+            /* Se deja de asignar un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+          }
+
+          dibuja(gl) {
+
+            /* Se activa el objeto del arreglo de vértices */
+            gl.bindVertexArray(this.trianguloVAO);
+            /* Se renderiza las primitivas desde los datos del arreglo */
+            gl.drawArrays(gl.TRIANGLE_STRIP , 0, 100);
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+          }
+        }
+
+        class DinosaurioT {
+          constructor(gl) {
+            var vertices = [
+
+            -0.79	,	 0.28	, 
+            -0.87	,	 0.28	,
+            -0.79	,	 0.11	,
+            -0.87	,	-0.24	,
+            -0.69	,	 0.11	, 
+            -0.78	,	-0.24	, 
+            -0.69	,	 0.02	,
+            -0.78	,	-0.32	,
+            -0.61	,	 0.02	, 
+            -0.69	,	-0.32	,
+            -0.61	,	-0.07	,  
+            -0.69	,	-0.41	,
+            -0.43	,	-0.07	,
+            -0.60	,	-0.41	,
+            -0.52	,	-0.50	,
+            -0.60	,	-0.50	,
+             0.17	,	-0.50	,
+            -0.43	,	-0.07	,
+             0.17	,	-0.41	,
+            -0.44	,	 0.02	,
+             0.26	,	-0.41	,
+            -0.35	,	 0.02	,
+             0.26	,	-0.28	,
+            -0.35 ,	 0.11	,
+             0.34	,	-0.28	,
+            -0.22	,	 0.11	,
+             0.34	,	 0.03	,
+            -0.22	,	 0.11	,
+             0.52	,	 0.11	,
+             0.43	,	 0.03	,
+             0.52	,	-0.06	,
+             0.43	,	-0.06	,
+             0.52	,	 0.11	,
+             0.43	,	 0.03	,
+             0.34	,	 0.11	,
+            -0.22	,	 0.11	,
+            -0.22	,	 0.19	,
+            -0.09	,	 0.19	,
+             0.34	,	 0.11	,
+            -0.09	,	 0.28	,
+             0.34	,	 0.28	,
+             0.00	,	 0.28	,
+             0.34	,	 0.28	,
+             0.00	,	 0.85	,
+             0.17	,	 0.72	,
+             0.09	,	 0.85	,
+             0.17	,	 0.80	,
+             0.09	,	 0.93	,
+             0.26	,	 0.80	,
+             0.78	,	 0.93	,
+             0.26	,	 0.72	,
+             0.78	,	 0.85	,
+             0.43	,	 0.46	,
+             0.86	,	 0.85	,
+             0.86	,	 0.46	,
+             0.26	,	 0.72	,
+             0.43	,	 0.46	,
+             0.17	,	 0.72	,
+             0.34	,	 0.28	,
+             0.43	,	 0.46	,
+             0.43	,	 0.37	,
+             0.34	,	 0.28	,
+             0.69	,	 0.37	,
+             0.69	,	 0.28	,
+             0.43	,	 0.37	,
+             0.34	,	 0.28	,             
+            -0.52	,	-0.50	, 
+             0.09	,	-0.50	,
+            -0.52	,	-0.58	,
+             0.09	,	-0.58	,
+            -0.09	,	-0.58 ,
+             0.09	,	-0.67 ,
+            -0.09	,	-0.67 ,
+             0.09	,	-0.67 ,
+             0.00	,	-0.67 ,
+             0.09	,	-0.85 ,
+             0.00	,	-0.93 ,
+             0.17	,	-0.85 ,
+             0.17	,	-0.93 ,           
+             0.09	,	-0.85 ,
+             0.00	,	-0.93 ,
+             0.09	,	-0.58	,
+             0.00	,	-0.67	,
+            -0.09	,	-0.58 ,
+             0.09	,	-0.58	,
+            -0.44	,	-0.58 ,
+            -0.18	,	-0.58 ,
+            -0.44	,	-0.58 ,
+            -0.18	,	-0.67 ,
+            -0.44	,	-0.58 ,
+            -0.26	,	-0.67 ,
+            -0.44	,	-0.58 ,
+            -0.26	,	-0.76 ,
+            -0.44	,	-0.58 ,
+            -0.35	,	-0.76 ,
+            -0.43	,	-0.93 ,
+            -0.35	,	-0.84 ,
+            -0.27	,	-0.93 ,
+            -0.27	,	-0.84 ,           
+            ];
+
+            /* Se crea el objeto del arreglo de vértices (VAO) */
+            this.trianguloVAO = gl.createVertexArray();
+
+            /* Se activa el objeto */
+            gl.bindVertexArray(this.trianguloVAO);
+
+
+            /* Se genera un nombre (código) para el buffer */ 
+            var codigoVertices = gl.createBuffer();
+
+            /* Se asigna un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, codigoVertices);
+         
+            /* Se transfiere los datos desde la memoria nativa al buffer de la GPU */
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertices), gl.STATIC_DRAW);
+
+            /* Se habilita el arreglo de los vértices (indice = 0) */
+            gl.enableVertexAttribArray(0);
+
+            /* Se especifica los atributos del arreglo de vértices */
+            gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+            /* Se deja de asignar un nombre (código) al buffer */
+            gl.bindBuffer(gl.ARRAY_BUFFER, null);
+
+          }
+
+          dibuja(gl) {
+
+            /* Se activa el objeto del arreglo de vértices */
+            gl.bindVertexArray(this.trianguloVAO);
+
+            /* Se renderiza las primitivas desde los datos del arreglo */
+            //gl.drawArrays(gl.TRIANGLE_FAN , 0, 6);
+            gl.drawArrays(gl.TRIANGLE_STRIP , 0, 99);
+            /* Se desactiva el objeto del arreglo de vértices */
+            gl.bindVertexArray(null);
+
+          }
+        }
+
+        /***************************************************************************/
+        /* Se renderizan todos los objetos                                         */
+        /***************************************************************************/
+        var saltando = false;
+        var muerto = false;
+        var agachado = false;
+
+        function logicadino(){
+          salta ();
+          colision ();
+        }
+
+        function salta(){
+          if (saltando == true) {
+            agachado = false;
+            if (muerto != true ){
+              ty = ty + vely;
+              if (ty > 2.4){
+              vely = -0.07;
+              }
+              else {
+                if (ty < -1){
+                  ty = -1;
+                  vely = 0.1;
+                  saltando = false;
+                }
+              }
+            }
+          }
+        }
+        
+        function colision (){
+         if (agachado == false) {
+          if (px <= -8 && px >= -8.5){
+            if (ty <= 0.9){
+              veln = 0;
+              velc = 0;
+              vels = 0;
+              muerto = true;
+            }
+          }
+          
+          if (px <= -8 && px >= -8.2){
+            if (ty <= 0.6){
+              veln = 0;
+              velc = 0;
+              vels = 0;
+              muerto = true;
+            }
+          }
+         }
+         else {
+            if (px <= -7.7 && px >= -8.5){
+                veln = 0;
+                velc = 0;
+                vels = 0;
+                muerto = true;     
+            }
+          }
+        }
+
+        function logicacactus(){
+          if (muerto == false){cpuntos++;}        
+          if (px < -10){
+            px = 0;
+            cpuntos = cpuntos + 100;
+            if (cpuntos >= cnivel * 1000) {
+              cnivel ++;
+              velc = velc + 0.012;
+            }
+          }
+          else{
+           px = px - velc;
+          }
+        }
+
+        function logicasuelo(){        
+          if (pxs < -18){
+            pxs = 0;
+          }
+          else{
+            pxs = pxs - vels;
+          } 
+        }
+
+        function logicanube(){
+          if (pxn < -17){
+            pxn = 0;
+          }
+          else{
+            pxn = pxn - veln;
+          }
+        }
+
+        function dibuja() {
+          let _MatrizModelo = new Array(16);
+
+          gl.clear(gl.COLOR_BUFFER_BIT);
+
+          //suelo
+          identidad(MatrizModelo);
+          traslacion(MatrizModelo, pxs, -1.80, 0); 
+          gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+          gl.uniform4f(uColor, 0, 0, 0, 1);
+          suelo.dibuja(gl);
+          logicasuelo();
+                    
+          //cactus
+          identidad(MatrizModelo);
+          traslacion(MatrizModelo, 5, -1, 0); // Modelo = Modelo * T(0,1,0); (composición)
+          traslacion(MatrizModelo, px, 0, 0); // Modelo = Modelo * T(0,1,0); (su lugar)
+          escalacion(MatrizModelo, 0.5, 1, 0);          
+          gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+          gl.uniform4f(uColor, 0, 0, 0, 1);
+          cactus.dibuja(gl);
+          cactust.dibuja(gl);
+          
+          escalacion(MatrizModelo, 0.8, 0.7, 1)
+          rotacionY(MatrizModelo, 180);         
+          gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+          cactus.dibuja(gl);  
+          
+          identidad(MatrizModelo);
+          traslacion(MatrizModelo, 5, -1.2, 0); // Modelo = Modelo * T(0,1,0); (composición)
+          traslacion(MatrizModelo, px + 0.35, 0, 0); // Modelo = Modelo * T(0,1,0); (su lugar)
+          escalacion(MatrizModelo, 0.3, 0.8, 0);          
+          gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+          gl.uniform4f(uColor, 0, 0, 0, 1);
+          cactus.dibuja(gl);
+          cactust.dibuja(gl);
+          
+          escalacion(MatrizModelo, 0.8, 0.7, 1)
+          rotacionY(MatrizModelo, 180);         
+          gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+          cactus.dibuja(gl);  
+          
+          logicacactus();
+
+          //nube
+          identidad(MatrizModelo);
+          traslacion(MatrizModelo, 5, 0, 0); // Modelo = Modelo * T(0,1,0); (composición)
+          traslacion(MatrizModelo, pxn, 0, 0); // Modelo = Modelo * T(0,1,0); (su lugar)
+          escalacion(MatrizModelo, 0.5, 1, 0);
+          gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+          gl.uniform4f(uColor, 0, 0, 0, 0.2);
+          nube.dibuja(gl);
+          logicanube(); 
+
+          identidad(MatrizModelo);
+          traslacion(MatrizModelo, 12, 1, 0); // Modelo = Modelo * T(0,1,0); (composición)
+          traslacion(MatrizModelo, pxn, 0, 0); // Modelo = Modelo * T(0,1,0); (su lugar)
+          escalacion(MatrizModelo, 0.5, 1, 0);
+          gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+          gl.uniform4f(uColor, 0, 0, 0, 0.5);
+          nube.dibuja(gl);
+          logicanube(); 
+
+          if (agachado == true) {
+            //dninosaurio agachado
+            identidad(MatrizModelo);
+            traslacion(MatrizModelo, -3.5, ty - 0.5, 0); // Modelo = Modelo * T(0,-1,0); (su lugar)
+            escalacion(MatrizModelo, 0.3, 0.7, 0);
+            gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+            gl.uniform4f(uColor, 0, 0, 0, 1);
+            dinosaurio.dibuja(gl);
+            logicadino(); 
+          }
+                   
+          else{
+            //dninosaurio
+            identidad(MatrizModelo);
+            traslacion(MatrizModelo, -3.5, ty, 0); // Modelo = Modelo * T(0,-1,0); (su lugar)
+            escalacion(MatrizModelo, 0.5, 1, 0);
+            gl.uniformMatrix4fv(uMatrizModelo, false, MatrizModelo);
+            gl.uniform4f(uColor, 0, 0, 0, 1);
+            dinosauriot.dibuja(gl);
+            logicadino(); 
+          }
+          
+          punnodo.nodeValue = cpuntos.toFixed(0);
+          nivnodo.nodeValue = cnivel.toFixed(0);
+  
+          /* Solicita que el navegador llame nuevamente a dibuja */
+          requestAnimationFrame(dibuja);
+        }
+        
+        function main() {
+          /* Paso 1: Se prepara el lienzo y se obtiene el contexto del WebGL.        */
+          canvas = document.getElementById("webglcanvas");
+          gl = canvas.getContext("webgl2");
+          if (!gl) {
+             document.write("WebGL 2.0 no está disponible en tu navegador");
+             return;
+          }
+
+          // tabulador
+          document.addEventListener('keydown', function (evento){
+            
+            if (evento.keyCode == 32 || evento.keyCode == 38){
+              console.log("salta");
+              if (muerto == false){
+                saltando = true;
+                salta();
+              }
+              else{
+                alert ("Intentalo nuevamente, presiona tecla Espacio");
+                pxn = 0;
+                pxs = 0;
+                px = 0;
+                ty = -1;
+                vely = 0.1;
+                veln = 0.01;
+                vels = 0.08;
+                velc = 0.06;
+                muerto = false;
+                cpuntos = 0;
+                cnivel = 1;             
+              }
+            }
+
+            if (evento.keyCode == 40 && muerto == false && saltando == false){
+                agachado = true;
+              }
+            else {agachado = false;
+              }
+          });
+
+          gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+
+          /* Paso 2: Se crean, compilan y enlazan los programas Shader               */
+          compilaEnlazaLosShaders();
+
+          /* Paso 3: Se define la geometría y se almacenan en los buffers de memoria.*/
+        
+          dinosaurio = new Dinosaurio(gl);
+          dinosauriot = new DinosaurioT(gl);
+          cactus = new Cactus(gl);
+          cactust = new CactusT(gl);
+          cubo = new Cubo(gl);
+          nube = new Nube(gl);
+          suelo = new Suelo (gl);
+
+          /* Paso 4: Se obtiene los ID de las variables de entrada de los shaders    */
+          gl.useProgram(programaID);
+          uColor = gl.getUniformLocation(programaID, "uColor");
+          uMatrizProyeccion = gl.getUniformLocation(programaID, "uMatrizProyeccion");
+          uMatrizVista = gl.getUniformLocation(programaID, "uMatrizVista");
+          uMatrizModelo = gl.getUniformLocation(programaID, "uMatrizModelo");
+
+          /* Paso 5: Se define la proyección                                        */
+          ortho(MatrizProyeccion, -5, 5, -5, 5, -5, 5);
+          gl.uniformMatrix4fv(uMatrizProyeccion, false, MatrizProyeccion);
+
+          /* Paso 6: Se renderizan los objetos                                       */
+          gl.clearColor(0.0, 0.0, 0.0, 0.0);
+          identidad(MatrizVista);
+          gl.uniformMatrix4fv(uMatrizVista, false, MatrizVista);
+          dibuja();  
+                  
+        }
+        /* Llama a main una vez que la página web se haya cargado. */
+        window.onload = main;
+      </script>
+   </body>
+</html>
